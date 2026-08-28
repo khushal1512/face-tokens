@@ -1,0 +1,8 @@
+{
+  "version": 3,
+  "file": "index.js",
+  "sourceRoot": "../../../",
+  "sources": ["facetoken.compact"],
+  "names": [],
+  "mappings": ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;EAAA;;;;;;;;;;;;;;;;MAkBA,AAAA,IAyBC;;;;;cAxBC,IAA+C;;;;;;;;;;;;;;;;;;yCAA/C,IAA+C;;;;;;;iEAA/C,IAA+C;;;OAwBhD;MAED,AAAA,WAEC;;;;;cAF0B,SAAiB;;;;;;;;;;;;;;;;;;yCAAjB,SAAiB;;;;;;;;;6CAAjB,SAAiB;;;OAE3C;;;;;;;;;;GACA;EAhDD;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;IAWA;;;;;;;;;;yEAAgD;IAChD;;;;;;;;;;yEAAmD;IACnD;;;;;;;;;yEAAmC;;;;;;;GAmClC;EAjCD,AAAA,sBAAyC;;0DAAzC,mBAAyC;;;;;;;;;;;;;;GAAA;EACzC,AAAA,qBAAuC;;0DAAvC,kBAAuC;;;;;;;;;;;;;;GAAA;EAEvC,AAAA,OAyBC,4BAxBC,IAA+C;UAEzC,MAA4B;UAC5B,OAA4B;QAG3B,GAAqB;mCAAZ,OAAK,EAAd,GAAqB;;qDAGpB;;;;;;;;;;;4KAA2B,MAAI;;;;0HAArB;;UAElB,KAAW;IAAX;;;;;;;;;;6FAAA,KAAW;;;;wEAAA;UACL,SAAkD,2BAA/B;;;;;;;;;;;mHAAW;UAEpC,KAAM,cACK,SAAO;2BACA,IAAE;8BACC,MAAI;mCACC,OAAK;IAJ/B;;;;;;;;;;2HAAc,SAAO;;;2HAArB,KAAM;;;wEAAA;IAON;;;;;;;;;;2HAA2B,MAAI;;;2HAAG,SAAO;;;wEAA/B;WAEH,SAAO;GACf;EAED,AAAA,cAEC,4BAF0B,SAAiB;oDACnC;;;;;;;;;;;2KAAuB,SAAO;;;;yHAAxB;;;GACd;;;;;;;;;;;;;;;;IApCD;;;;;uCAAA;;;;;;;;;;;;;;;;4GAAgD;;;;;;uCAAhD;;;;;;;;;;;;4GAAgD;;;;;;;;;;;;;;uCAAhD;;;;;;;;;;;;;;;4GAAgD;;;;;;;;;;;;;;uCAAhD;;;;;;;;;;;;;;;;;4GAAgD;;;;;;;;;KAAA;IAChD;;;;;uCAAA;;;;;;;;;;;;;;;;4GAAmD;;;;;;uCAAnD;;;;;;;;;;;;4GAAmD;;;;;;;;;;;;;;uCAAnD;;;;;;;;;;;;;;;4GAAmD;;;;;;;;;;;;;;uCAAnD;;;;;;;;;;;;;;;;;4GAAmD;;;;;;;;;KAAA;IACnD;qCAAA;;;;;;;;;;;0GAAmC;KAAA;;;;;;;;;;;;;"
+}
