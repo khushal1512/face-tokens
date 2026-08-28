@@ -1,0 +1,48 @@
+pragma language_version 0.23;
+
+import CompactStandardLibrary;
+
+struct TokenEntry {
+  tokenId: Uint<64>,
+  owner: Either<ZswapCoinPublicKey, ContractAddress>,
+  faceHash: Bytes<32>,
+  livenessScore: Uint<64>
+}
+
+export ledger tokens: Map<Uint<64>, TokenEntry>;
+export ledger faceHashes: Map<Bytes<32>, Uint<64>>; // faceHash -> tokenId
+export ledger nextTokenId: Counter;
+
+witness localFaceVectorHash(): Bytes<32>;
+witness localLivenessScore(): Uint<64>;
+
+export circuit mint(
+  to: Either<ZswapCoinPublicKey, ContractAddress>
+): Uint<64> {
+  const hash = localFaceVectorHash();
+  const score = localLivenessScore();
+
+  // Assert minimum liveness score
+  assert(disclose(score) >= 70, "Liveness score too low");
+  
+  // Assert face hash has not been registered yet (Sybil resistance)
+  assert(!faceHashes.member(disclose(hash)), "Face already registered");
+
+  nextTokenId.increment(1);
+  const tokenId = disclose(nextTokenId.read() as Uint<64>);
+
+  tokens.insert(tokenId, TokenEntry {
+    tokenId: tokenId,
+    owner: disclose(to),
+    faceHash: disclose(hash),
+    livenessScore: disclose(score)
+  });
+
+  faceHashes.insert(disclose(hash), tokenId);
+
+  return tokenId;
+}
+
+export circuit verifyHuman(tokenId: Uint<64>): [] {
+  assert(tokens.member(disclose(tokenId)), "Token does not exist");
+}
