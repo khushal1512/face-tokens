@@ -1,0 +1,13 @@
+{
+  "name": "ft-workspace",
+  "private": true,
+  "workspaces": [
+    "contract",
+    "api",
+    "ft-ui"
+  ],
+  "scripts": {
+    "compile": "cd contract && npm run compact",
+    "build": "cd contract && npm run build && cd ../api && npm run build && cd ../ft-ui && npm run build"
+  }
+}
