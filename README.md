@@ -34,8 +34,8 @@ and `livenessScore`. Nothing in that set can be reversed into an image.
 
 ## Running locally
 
-Requirements: Node 20 or newer, and a Midnight wallet extension. The 1AM wallet
-is the easiest option because it proves transactions itself.
+Requirements: Node 20 or newer and the 1AM wallet extension set to **Preview**.
+Nothing else. No Docker, no proof server, no faucet, no tokens.
 
 ```bash
 git clone https://github.com/khushal1512/face-tokens.git
@@ -49,52 +49,45 @@ first, then copies the proving keys and ZK IR into `ft-ui/public` so
 `FetchZkConfigProvider` can fetch them, then starts Vite.
 
 Camera access needs a secure context. `localhost` counts as one, so the scan
-works in local development without any TLS setup.
+works locally without any TLS setup.
 
-### About the proof server
+## Networks
 
-Midnight has no public shared proof server, and that is deliberate: proving
-consumes your private witness data, so sending it to a stranger's endpoint would
-undo the privacy the circuit gives you. There are two ways to satisfy it.
+The app targets whatever `VITE_NETWORK_ID` in `ft-ui/.env` says, and reads every
+endpoint except the read-only indexer from the wallet's `getConfiguration()`.
 
-**Wallet side proving, which is the default here.** The 1AM wallet exposes
-`getProvingProvider()` and routes proving through its own ProofStation. This app
-tries that first, so with 1AM installed you do not need Docker at all.
+| Network | Proving | Fees | What the user needs |
+|---|---|---|---|
+| `preview` (default) | 1AM ProofStation, remote | Sponsored by 1AM | Nothing |
+| `preprod` | Your own proof server | You pay | Faucet NIGHT, register it for DUST, wait |
 
-**Your own proof server, as a fallback.** If the wallet cannot prove on its own,
-the app falls back to whatever `proverServerUri` the wallet reports. To run one:
+**Preview is the default and the recommended one.** Proving happens at
+`api-preview.1am.xyz` inside the wallet's own flow, so no proof server runs
+anywhere near the user, and 1AM covers the fees. A reviewer installs the
+extension, sets it to Preview, and mints. They never touch a faucet.
 
-```bash
-npm run proof-server     # docker, listens on :6300
+To use preprod instead, set both of these in `ft-ui/.env`:
+
+```
+VITE_NETWORK_ID=preprod
+VITE_INDEXER_URL=https://indexer.preprod.midnight.network/api/v4/graphql
 ```
 
-### Network choice
+and be aware of what that costs you:
 
-| Network | Proving | Fees |
-|---|---|---|
-| `preview` | 1AM ProofStation | Sponsored, the user pays nothing |
-| `preprod` | 1AM ProofStation or your own server | You need NIGHT and DUST |
+- A proof server has to be running. `npm run proof-server` starts one on `:6300`.
+- Fees are not sponsored. Fund the unshielded address (`mn_addr_preprod1...`)
+  from `https://faucet.preprod.midnight.network`, wait for the wallet to finish
+  syncing, register the NIGHT UTXOs for DUST generation, then wait again while
+  DUST accrues. A wallet that is still syncing reports itself as uninitialised
+  and will refuse to register.
 
-`preprod` is the default in `ft-ui/.env.preprod`. On `preview` the wallet
-sponsors fees, so reviewers need no faucet, no NIGHT and no DUST registration.
-Switch by setting `VITE_NETWORK_ID=preview` and pointing `VITE_INDEXER_URL` at
-`https://indexer.preview.midnight.network/api/v4/graphql`, then redeploy the
-contract on that network.
+A contract deployed on one network does not exist on the other. Switching
+networks means deploying again and replacing `VITE_DEFAULT_CONTRACT`.
 
-### Getting DUST on preprod
-
-DUST is the fee resource, and NIGHT does not pay fees directly. NIGHT generates
-DUST, but only after its UTXOs are registered on chain.
-
-1. Copy your unshielded address from 1AM. It starts `mn_addr_preprod1`.
-2. Request NIGHT from `https://faucet.preprod.midnight.network`.
-3. Let the wallet finish syncing. A wallet that is still syncing reports itself
-   as uninitialised, and DUST registration will refuse to run.
-4. Register the NIGHT UTXOs for DUST generation from the wallet.
-5. Wait. DUST accrues over minutes rather than instantly.
-
-The app reads `getDustBalance()` on connect and warns before you scan if the
-balance is still zero, so you do not discover it inside a failing transaction.
+The app checks all of this on connect and shows a notice above the scanner if
+the wallet cannot pay for a mint yet, so you find out before scanning rather
+than inside a failing transaction.
 
 ### Recompiling the circuit
 
@@ -107,19 +100,20 @@ npm run compile
 
 ## Deploying so other people can use it
 
-The frontend is a static bundle. Proving happens in the wallet's proof server and
-reading happens through the public indexer, so there is no backend to host.
+The frontend is a static bundle. Proving happens in the wallet and reading
+happens through the public indexer, so there is no backend to host.
 
 **1. Deploy the contract once and note the address.**
 
-Open the app, connect a funded wallet, press `Select`, then `Deploy new`. Copy
-the 64 character address it returns.
+Open the app, connect the wallet, press `Select`, then `Deploy new`. Copy the
+64 character address it returns. On preview this costs nothing. Deploy against
+the same network the app is configured for.
 
 **2. Bake that address into the build** so visitors do not have to deploy their
 own instance:
 
 ```bash
-# ft-ui/.env.preprod
+# ft-ui/.env
 VITE_DEFAULT_CONTRACT=<the 64 hex character address>
 ```
 
@@ -139,8 +133,8 @@ Any static host works. On Vercel, import the repository and set:
 | Install command | `npm install` |
 | Node version | 20.x |
 
-Add the environment variables from `ft-ui/.env.preprod` in the Vercel project
-settings, including `VITE_DEFAULT_CONTRACT`. Page analytics are already wired up
+Add the environment variables from `ft-ui/.env` in the Vercel project settings,
+including `VITE_DEFAULT_CONTRACT`. Page analytics are already wired up
 through `@vercel/analytics` and start reporting once the project is deployed.
 
 The build copies `keys/` and `zkir/` into `dist/`. Those files are what
@@ -153,9 +147,13 @@ then connecting a wallet and minting.
 
 ### What a reviewer needs
 
-- The 1AM wallet extension, with preprod NIGHT registered for DUST
-- Camera permission, which the browser grants over HTTPS or on localhost
-- Nothing else. No API key, no backend, no database.
+On the default preview network:
+
+- The 1AM wallet extension, set to Preview
+- Camera permission, which the browser grants over HTTPS
+
+That is the whole list. No tokens, no faucet, no proof server, no API key, no
+backend, no database. Fees are sponsored and proving is remote.
 
 ## Notes on the wallet integration
 
