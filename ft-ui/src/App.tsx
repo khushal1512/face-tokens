@@ -9,6 +9,7 @@ import {
   getCompatibleWallets,
   type FaceTokenDeployment,
   type WalletInfo,
+  type WalletSession,
 } from './contexts/BrowserFaceTokenManager';
 import { useFaceToken } from './hooks/useFaceToken';
 
@@ -18,6 +19,7 @@ import Scanner, { type ScanResult } from './components/Scanner';
 import SuccessModal from './components/SuccessModal';
 import IntroAndExplainer from './components/IntroAndExplainer';
 import IdentitiesLedger from './components/IdentitiesLedger';
+import ReadinessNotice from './components/ReadinessNotice';
 
 const NETWORK_ID = (import.meta.env.VITE_NETWORK_ID ?? 'preprod') as NetworkId;
 const DEFAULT_CONTRACT = (import.meta.env.VITE_DEFAULT_CONTRACT ?? '').trim();
@@ -59,6 +61,7 @@ export default function App() {
   const [selectedWalletId, setSelectedWalletId] = useState('');
   const [address, setAddress] = useState<string | null>(null);
   const [coinPublicKeyBytes, setCoinPublicKeyBytes] = useState<Uint8Array | null>(null);
+  const [session, setSession] = useState<WalletSession | null>(null);
 
   // ── Contract ────────────────────
   const [contractAddress, setContractAddress] = useState(DEFAULT_CONTRACT);
@@ -136,9 +139,10 @@ export default function App() {
     setWalletState('connecting');
     setError(null);
     try {
-      const session = await getManager().connect(selectedWalletId || undefined);
-      setCoinPublicKeyBytes(session.coinPublicKeyBytes);
-      setAddress(session.unshieldedAddress);
+      const connected = await getManager().connect(selectedWalletId || undefined);
+      setSession(connected);
+      setCoinPublicKeyBytes(connected.coinPublicKeyBytes);
+      setAddress(connected.unshieldedAddress);
       setWalletState('connected');
       setPage('app');
     } catch (e) {
@@ -149,6 +153,7 @@ export default function App() {
 
   const disconnectWallet = useCallback(() => {
     getManager().disconnect();
+    setSession(null);
     setCoinPublicKeyBytes(null);
     setAddress(null);
     setWalletState('ready');
@@ -302,6 +307,8 @@ export default function App() {
         copyToClipboard={copyToClipboard}
         copied={copied}
       />
+
+      <ReadinessNotice session={session} />
 
       <IntroAndExplainer />
 

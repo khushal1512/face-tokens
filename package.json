@@ -12,7 +12,7 @@
     "build": "npm run build:packages && npm run build -w ft-ui",
     "dev": "npm run build:packages && npm run dev -w ft-ui",
     "preview": "npm run preview -w ft-ui",
-    "proof-server": "docker run -p 6300:6300 midnightntwrk/proof-server:8.0.3 -- 'midnight-proof-server --network preprod'"
+    "proof-server": "docker run --rm -p 6300:6300 midnightntwrk/proof-server:8.0.3 -- midnight-proof-server --network preprod"
   },
   "overrides": {
     "@swc/core": "1.15.46"

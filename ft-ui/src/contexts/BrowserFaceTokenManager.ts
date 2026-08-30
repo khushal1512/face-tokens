@@ -17,6 +17,8 @@ import type { ProofProvider, UnboundTransaction } from '@midnight-ntwrk/midnight
 const COMPATIBLE_CONNECTOR_API_VERSION = '4.x';
 const CONNECT_TIMEOUT_MS = 30_000;
 const CONNECT_ATTEMPTS = 3;
+/** Networks where 1AM sponsors fees, so no NIGHT and no DUST are needed. */
+const SPONSORED_NETWORKS = new Set(['preview', 'mainnet']);
 /** Errors worth retrying: the extension's worker often reports a stale state. */
 const TRANSIENT_CONNECT_ERROR = /lock|not enabled|not ready|unauthori[sz]ed|no account|initiali/i;
 
@@ -33,6 +35,13 @@ export interface WalletSession {
   readonly unshieldedAddress: string;
   readonly coinPublicKeyBytes: Uint8Array;
   readonly providers: FaceTokenProviders;
+  /** Where proofs are generated. 'wallet' means nothing has to run locally. */
+  readonly provingMode: 'wallet' | 'proof-server';
+  readonly proverServerUri?: string;
+  /** False on preview and mainnet, where 1AM pays the fees. */
+  readonly feesSponsored: boolean;
+  /** Undefined when the wallet refuses to report it. */
+  readonly dustBalance?: bigint;
 }
 
 export class BrowserFaceTokenManager {
@@ -153,7 +162,17 @@ const createWalletSession = async (logger: Logger, walletId?: string): Promise<W
     fetch.bind(window),
   );
 
-  const proofProvider = await resolveProofProvider(api, zkConfigProvider, config.proverServerUri, logger);
+  const { provider: proofProvider, mode: provingMode } = await resolveProofProvider(
+    api,
+    zkConfigProvider,
+    config.proverServerUri,
+    logger,
+  );
+
+  const feesSponsored = SPONSORED_NETWORKS.has(networkId);
+  // On preprod the user funds their own fees, so knowing this up front lets the
+  // UI say "you cannot mint yet" instead of failing inside the transaction.
+  const dustBalance = feesSponsored ? undefined : await readDustBalance(api, logger);
 
   // Wallets hand these back bech32m encoded (mn_shield-cpk_...). The SDK and the
   // circuits both want plain hex, and decoding needs the network id, which is
@@ -205,8 +224,22 @@ const createWalletSession = async (logger: Logger, walletId?: string): Promise<W
     unshieldedAddress: unshielded.unshieldedAddress,
     coinPublicKeyBytes: utils.fromHex(coinPublicKeyHex),
     providers,
+    provingMode,
+    proverServerUri: config.proverServerUri,
+    feesSponsored,
+    dustBalance,
   };
 };
+
+async function readDustBalance(api: ConnectedAPI, logger: Logger): Promise<bigint | undefined> {
+  try {
+    const { balance } = await api.getDustBalance();
+    return balance;
+  } catch (error) {
+    logger.warn({ error }, 'wallet would not report a dust balance');
+    return undefined;
+  }
+}
 
 /**
  * Prefer proving inside the wallet. 1AM exposes `getProvingProvider`, which
@@ -218,7 +251,7 @@ async function resolveProofProvider(
   zkConfigProvider: FetchZkConfigProvider<FaceTokenCircuitKeys>,
   proverServerUri: string | undefined,
   logger: Logger,
-): Promise<ProofProvider> {
+): Promise<{ provider: ProofProvider; mode: 'wallet' | 'proof-server' }> {
   type WalletWithProving = ConnectedAPI & {
     getProvingProvider?: (zk: unknown) => Promise<ProvingProvider>;
   };
@@ -231,7 +264,10 @@ async function resolveProofProvider(
       // Calling prove() directly is the only path that hands the wallet's
       // proving provider a cost model it accepts.
       return {
-        proveTx: (unprovenTx) => unprovenTx.prove(provingProvider, CostModel.initialCostModel()),
+        mode: 'wallet',
+        provider: {
+          proveTx: (unprovenTx) => unprovenTx.prove(provingProvider, CostModel.initialCostModel()),
+        },
       };
     } catch (error) {
       logger.warn({ error }, 'wallet proving unavailable, falling back to a proof server');
@@ -244,7 +280,8 @@ async function resolveProofProvider(
         'Run one with "npm run proof-server", then reconnect.',
     );
   }
-  return httpClientProofProvider(proverServerUri, zkConfigProvider);
+  logger.info({ proverServerUri }, 'proving through an external proof server');
+  return { mode: 'proof-server', provider: httpClientProofProvider(proverServerUri, zkConfigProvider) };
 }
 
 /**

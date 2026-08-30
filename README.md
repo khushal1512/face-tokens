@@ -75,8 +75,26 @@ npm run proof-server     # docker, listens on :6300
 | `preview` | 1AM ProofStation | Sponsored, the user pays nothing |
 | `preprod` | 1AM ProofStation or your own server | You need NIGHT and DUST |
 
-`preprod` is the default in `ft-ui/.env.preprod`. Switch `VITE_NETWORK_ID` to
-`preview` if you would rather reviewers did not have to fund a wallet.
+`preprod` is the default in `ft-ui/.env.preprod`. On `preview` the wallet
+sponsors fees, so reviewers need no faucet, no NIGHT and no DUST registration.
+Switch by setting `VITE_NETWORK_ID=preview` and pointing `VITE_INDEXER_URL` at
+`https://indexer.preview.midnight.network/api/v4/graphql`, then redeploy the
+contract on that network.
+
+### Getting DUST on preprod
+
+DUST is the fee resource, and NIGHT does not pay fees directly. NIGHT generates
+DUST, but only after its UTXOs are registered on chain.
+
+1. Copy your unshielded address from 1AM. It starts `mn_addr_preprod1`.
+2. Request NIGHT from `https://faucet.preprod.midnight.network`.
+3. Let the wallet finish syncing. A wallet that is still syncing reports itself
+   as uninitialised, and DUST registration will refuse to run.
+4. Register the NIGHT UTXOs for DUST generation from the wallet.
+5. Wait. DUST accrues over minutes rather than instantly.
+
+The app reads `getDustBalance()` on connect and warns before you scan if the
+balance is still zero, so you do not discover it inside a failing transaction.
 
 ### Recompiling the circuit
 
