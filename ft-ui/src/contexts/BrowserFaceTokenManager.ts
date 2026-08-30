@@ -6,6 +6,7 @@ import { type ConnectedAPI, type InitialAPI } from '@midnight-ntwrk/dapp-connect
 import { FetchZkConfigProvider } from '@midnight-ntwrk/midnight-js-fetch-zk-config-provider';
 import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
 import semver from 'semver';
+import { parseCoinPublicKeyToHex, parseEncPublicKeyToHex } from '@midnight-ntwrk/midnight-js-utils';
 import { Binding, CostModel, type FinalizedTransaction, Proof, type ProvingProvider, SignatureEnabled, Transaction, type TransactionId } from '@midnight-ntwrk/midnight-js-protocol/ledger';
 import { type FaceTokenPrivateState } from 'facetoken-contract';
 import { inMemoryPrivateStateProvider } from '../in-memory-private-state-provider.js';
@@ -155,14 +156,28 @@ const createWalletSession = async (logger: Logger, walletId?: string): Promise<W
 
   const proofProvider = await resolveProofProvider(api, zkConfigProvider, config.proverServerUri, logger);
 
+  // Wallets hand these back bech32m encoded (mn_shield-cpk_...). The SDK and the
+  // circuits both want plain hex, and decoding needs the network id, which is
+  // why it happens here rather than in the api package.
+  const coinPublicKeyHex = toHexKey(
+    shielded.shieldedCoinPublicKey,
+    (raw) => parseCoinPublicKeyToHex(raw, networkId),
+    'coin public key',
+  );
+  const encryptionPublicKeyHex = toHexKey(
+    shielded.shieldedEncryptionPublicKey,
+    (raw) => parseEncPublicKeyToHex(raw, networkId),
+    'encryption public key',
+  );
+
   const providers: FaceTokenProviders = {
     privateStateProvider: inMemoryPrivateStateProvider<typeof facetokenPrivateStateKey, FaceTokenPrivateState>(),
     zkConfigProvider,
     proofProvider,
     publicDataProvider: createPatchedPublicDataProvider(config.indexerUri, config.indexerWsUri),
     walletProvider: {
-      getCoinPublicKey: () => shielded.shieldedCoinPublicKey,
-      getEncryptionPublicKey: () => shielded.shieldedEncryptionPublicKey,
+      getCoinPublicKey: () => coinPublicKeyHex,
+      getEncryptionPublicKey: () => encryptionPublicKeyHex,
       balanceTx: async (tx: UnboundTransaction): Promise<FinalizedTransaction> => {
         const balanced = await api.balanceUnsealedTransaction(toHex(tx.serialize()));
         if (!balanced?.tx) {
@@ -189,7 +204,7 @@ const createWalletSession = async (logger: Logger, walletId?: string): Promise<W
     api,
     networkId,
     unshieldedAddress: unshielded.unshieldedAddress,
-    coinPublicKeyBytes: utils.coinPublicKeyToBytes(shielded.shieldedCoinPublicKey),
+    coinPublicKeyBytes: utils.fromHex(coinPublicKeyHex),
     providers,
   };
 };
@@ -231,6 +246,29 @@ async function resolveProofProvider(
     );
   }
   return httpClientProofProvider(proverServerUri, zkConfigProvider);
+}
+
+/**
+ * Normalise one of the wallet's public keys to hex. Older builds return raw
+ * bytes or a `{ bytes }` wrapper instead of a bech32m string.
+ */
+function toHexKey(raw: unknown, parse: (value: string) => string, label: string): string {
+  if (typeof raw === 'string') {
+    try {
+      return parse(raw);
+    } catch (error) {
+      throw new Error(
+        `Could not decode the ${label} the wallet returned ("${raw.slice(0, 20)}..."). ` +
+          'This usually means the wallet is on a different network than the dApp. ' +
+          `Underlying error: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  if (raw instanceof Uint8Array) return utils.toHex(raw);
+  if (raw && typeof raw === 'object' && 'bytes' in raw) {
+    return utils.toHex((raw as { bytes: Uint8Array }).bytes);
+  }
+  throw new Error(`The wallet returned no ${label}.`);
 }
 
 /** `submitTransaction` returns a bare id on some wallets and an object on others. */

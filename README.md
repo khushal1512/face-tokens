@@ -149,5 +149,7 @@ then connecting a wallet and minting.
 - The hosted preprod indexer rejects `contractAction` queries with a null offset,
   which is what the SDK sends when asked for the latest state. Reads go through
   `createPatchedPublicDataProvider` for that reason.
-- Coin public keys are normalised through `coinPublicKeyToBytes`, which throws on
-  a format it cannot decode rather than quietly minting to 32 zero bytes.
+- Wallets return shielded keys bech32m encoded (`mn_shield-cpk_...`). They are
+  decoded with `parseCoinPublicKeyToHex` from `midnight-js-utils`, which needs the
+  network id. Parsing one as raw hex would silently produce 32 zero bytes and mint
+  the token to nobody.
