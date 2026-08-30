@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "prebuild": "npm --prefix .. run build:packages",
     "dev": "mkdir -p ./public/keys ./public/zkir && cp -r ../contract/managed/facetoken/keys/* ./public/keys/ && cp -r ../contract/managed/facetoken/zkir/* ./public/zkir/ && vite",
     "build": "tsc && vite build && rm -rf ./dist/keys ./dist/zkir && cp -r ../contract/managed/facetoken/keys ./dist/keys && cp -r ../contract/managed/facetoken/zkir ./dist/zkir",
     "preview": "vite preview"
