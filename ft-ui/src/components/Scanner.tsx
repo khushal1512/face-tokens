@@ -11,6 +11,8 @@ export interface ScanResult {
 
 interface ScannerProps {
   modelsLoaded: boolean;
+  modelError: string | null;
+  onRetryModels: () => void;
   onScanComplete: (result: ScanResult) => void;
   isScanning: boolean;
   setIsScanning: (scanning: boolean) => void;
@@ -86,6 +88,8 @@ function faceRatios(points: Point[]): string {
 
 export default function Scanner({
   modelsLoaded,
+  modelError,
+  onRetryModels,
   onScanComplete,
   isScanning,
   setIsScanning,
@@ -282,12 +286,17 @@ export default function Scanner({
           </svg>
         </div>
         <p className="scan-start-copy">
-          The camera feed stays in this tab. Detection runs on your device and only a hash of the
-          measurements is ever sent anywhere.
+          {modelError
+            ? `${modelError} It is fetched from a CDN the first time you open the scanner.`
+            : 'The camera stays off until you start the scan. Detection then runs on your device, and only a hash of the measurements leaves it.'}
         </p>
-        <button className="btn-primary" onClick={startCamera} disabled={!modelsLoaded}>
-          {modelsLoaded ? 'Start face scan' : 'Loading model'}
-        </button>
+        {modelError ? (
+          <button className="btn-secondary" onClick={onRetryModels}>Try again</button>
+        ) : (
+          <button className="btn-primary" onClick={startCamera} disabled={!modelsLoaded}>
+            {modelsLoaded ? 'Start face scan' : 'Loading model'}
+          </button>
+        )}
       </div>
     );
   }

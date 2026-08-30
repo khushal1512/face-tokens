@@ -74,6 +74,8 @@ export default function App() {
 
   // ── Face scan ───────────────────
   const [modelsLoaded, setModelsLoaded] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
+  const [modelAttempt, setModelAttempt] = useState(0);
   const [isScanning, setIsScanning] = useState(false);
   const [scan, setScan] = useState<ScanResult | null>(null);
 
@@ -101,19 +103,22 @@ export default function App() {
   useEffect(() => {
     if (page !== 'app' || modelsLoaded) return;
     let cancelled = false;
+    setModelError(null);
     (async () => {
       try {
         await faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODEL_URL);
         await faceapi.nets.faceLandmark68Net.loadFromUri(FACE_MODEL_URL);
         if (!cancelled) setModelsLoaded(true);
       } catch {
-        if (!cancelled) setError('Could not load the face detection model. Check your connection and reload.');
+        // Recoverable: the scanner offers a retry rather than stranding the
+        // user on a permanently disabled button.
+        if (!cancelled) setModelError('The face detection model did not download.');
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [page, modelsLoaded]);
+  }, [page, modelsLoaded, modelAttempt]);
 
   // ── Poll for wallet extensions, which inject after page load ──
   useEffect(() => {
@@ -403,6 +408,8 @@ export default function App() {
           ) : (
             <Scanner
               modelsLoaded={modelsLoaded}
+              modelError={modelError}
+              onRetryModels={() => setModelAttempt((n) => n + 1)}
               onScanComplete={setScan}
               isScanning={isScanning}
               setIsScanning={setIsScanning}
