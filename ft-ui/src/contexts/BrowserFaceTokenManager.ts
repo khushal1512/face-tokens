@@ -6,7 +6,7 @@ import { type ConnectedAPI, type InitialAPI } from '@midnight-ntwrk/dapp-connect
 import { FetchZkConfigProvider } from '@midnight-ntwrk/midnight-js-fetch-zk-config-provider';
 import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
 import semver from 'semver';
-import { parseCoinPublicKeyToHex, parseEncPublicKeyToHex } from '@midnight-ntwrk/midnight-js-utils';
+import { parseCoinPublicKeyToHex } from '@midnight-ntwrk/midnight-js-utils';
 import { Binding, CostModel, type FinalizedTransaction, Proof, type ProvingProvider, SignatureEnabled, Transaction, type TransactionId } from '@midnight-ntwrk/midnight-js-protocol/ledger';
 import { type FaceTokenPrivateState } from 'facetoken-contract';
 import { inMemoryPrivateStateProvider } from '../in-memory-private-state-provider.js';
@@ -174,18 +174,18 @@ const createWalletSession = async (logger: Logger, walletId?: string): Promise<W
   // UI say "you cannot mint yet" instead of failing inside the transaction.
   const dustBalance = feesSponsored ? undefined : await readDustBalance(api, logger);
 
-  // Wallets hand these back bech32m encoded (mn_shield-cpk_...). The SDK and the
-  // circuits both want plain hex, and decoding needs the network id, which is
-  // why it happens here rather than in the api package.
-  const coinPublicKeyHex = toHexKey(
-    shielded.shieldedCoinPublicKey,
-    (raw) => parseCoinPublicKeyToHex(raw, networkId),
-    'coin public key',
-  );
-  const encryptionPublicKeyHex = toHexKey(
-    shielded.shieldedEncryptionPublicKey,
-    (raw) => parseEncPublicKeyToHex(raw, networkId),
-    'encryption public key',
+  // Two different consumers want two different encodings of the same key.
+  //
+  // The SDK's WalletProvider is handed whatever the wallet returned, untouched.
+  // Wallets return bech32m (mn_shield-cpk_...) and the SDK is happy with it, so
+  // re-encoding here would only invite breakage.
+  //
+  // The mint circuit is the opposite: its `to` argument is Bytes<32>, so the key
+  // has to be decoded. Reading the bech32m string as raw hex yields 32 zero
+  // bytes and mints the token to nobody, which is why this goes through the
+  // SDK's decoder rather than parseInt.
+  const coinPublicKeyBytes = utils.fromHex(
+    toHexKey(shielded.shieldedCoinPublicKey, (raw) => parseCoinPublicKeyToHex(raw, networkId), 'coin public key'),
   );
 
   const providers: FaceTokenProviders = {
@@ -194,8 +194,8 @@ const createWalletSession = async (logger: Logger, walletId?: string): Promise<W
     proofProvider,
     publicDataProvider: createPatchedPublicDataProvider(config.indexerUri, config.indexerWsUri),
     walletProvider: {
-      getCoinPublicKey: () => coinPublicKeyHex,
-      getEncryptionPublicKey: () => encryptionPublicKeyHex,
+      getCoinPublicKey: () => shielded.shieldedCoinPublicKey,
+      getEncryptionPublicKey: () => shielded.shieldedEncryptionPublicKey,
       balanceTx: async (tx: UnboundTransaction): Promise<FinalizedTransaction> => {
         const balanced = await api.balanceUnsealedTransaction(toHex(tx.serialize()));
         if (!balanced?.tx) {
@@ -222,7 +222,7 @@ const createWalletSession = async (logger: Logger, walletId?: string): Promise<W
     api,
     networkId,
     unshieldedAddress: unshielded.unshieldedAddress,
-    coinPublicKeyBytes: utils.fromHex(coinPublicKeyHex),
+    coinPublicKeyBytes,
     providers,
     provingMode,
     proverServerUri: config.proverServerUri,
@@ -342,6 +342,13 @@ async function connectWithRetry(wallet: WalletInfo, networkId: string, logger: L
   }
 
   const detail = lastError instanceof Error ? lastError.message : String(lastError);
+  if (/network/i.test(detail)) {
+    throw new Error(
+      `${wallet.name} refused a "${networkId}" connection. Set the extension to ${networkId}, ` +
+        `or change VITE_NETWORK_ID in ft-ui/.env to the network the wallet is on and restart the dev server. ` +
+        `Wallet said: ${detail}`,
+    );
+  }
   if (TRANSIENT_CONNECT_ERROR.test(detail)) {
     throw new Error(
       `${wallet.name} is reporting a locked wallet. Open the extension and unlock it. ` +
