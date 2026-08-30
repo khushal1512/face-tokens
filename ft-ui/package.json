@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "mkdir -p ./public/keys ./public/zkir && cp -r ../contract/managed/facetoken/keys/* ./public/keys/ && cp -r ../contract/managed/facetoken/zkir/* ./public/zkir/ && vite --mode preprod",
-    "build": "tsc && vite build --mode preprod && cp -r ../contract/managed/facetoken/keys ./dist/keys && cp -r ../contract/managed/facetoken/zkir ./dist/zkir",
+    "build": "tsc && vite build --mode preprod && rm -rf ./dist/keys ./dist/zkir && cp -r ../contract/managed/facetoken/keys ./dist/keys && cp -r ../contract/managed/facetoken/zkir ./dist/zkir",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -18,16 +18,17 @@
     "@midnight-ntwrk/midnight-js-protocol": "4.1.1",
     "@midnight-ntwrk/midnight-js-types": "4.1.1",
     "@midnight-ntwrk/midnight-js-utils": "4.1.1",
+    "@vercel/analytics": "^1.4.1",
+    "@vladmandic/face-api": "^1.7.12",
     "buffer": "^6.0.3",
-    "fp-ts": "^2.16.11",
-    "facetoken-contract": "*",
     "facetoken-api": "*",
+    "facetoken-contract": "*",
+    "fp-ts": "^2.16.11",
+    "pino": "^10.3.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "rxjs": "^7.8.2",
-    "semver": "^7.7.4",
-    "pino": "^10.3.1",
-    "@vladmandic/face-api": "^1.7.12"
+    "semver": "^7.7.4"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
