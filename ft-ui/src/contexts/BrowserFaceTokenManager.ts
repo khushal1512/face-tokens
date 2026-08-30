@@ -16,6 +16,9 @@ import type { ProofProvider, UnboundTransaction } from '@midnight-ntwrk/midnight
 
 const COMPATIBLE_CONNECTOR_API_VERSION = '4.x';
 const CONNECT_TIMEOUT_MS = 30_000;
+const CONNECT_ATTEMPTS = 3;
+/** Errors worth retrying: the extension's worker often reports a stale state. */
+const TRANSIENT_CONNECT_ERROR = /lock|not enabled|not ready|unauthori[sz]ed|no account|initiali/i;
 
 export type FaceTokenDeployment =
   | { readonly status: 'in-progress' }
@@ -130,11 +133,7 @@ const createWalletSession = async (logger: Logger, walletId?: string): Promise<W
     );
   }
 
-  const api = await withTimeout(
-    wallet.api.connect(requestedNetwork),
-    CONNECT_TIMEOUT_MS,
-    'The wallet did not respond to the connection request.',
-  );
+  const api = await connectWithRetry(wallet, requestedNetwork, logger);
 
   const [config, unshielded, shielded] = await Promise.all([
     api.getConfiguration(),
@@ -280,6 +279,43 @@ function normaliseTxId(result: unknown): TransactionId | undefined {
   }
   return undefined;
 }
+
+/**
+ * 1AM's background worker can answer the first connect of a page load with a
+ * locked state even when the wallet is unlocked, because the worker has not
+ * rehydrated yet. Waking it and asking again clears it, so a transient looking
+ * failure is retried before it reaches the user.
+ */
+async function connectWithRetry(wallet: WalletInfo, networkId: string, logger: Logger): Promise<ConnectedAPI> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= CONNECT_ATTEMPTS; attempt++) {
+    try {
+      return await withTimeout(
+        wallet.api.connect(networkId),
+        CONNECT_TIMEOUT_MS,
+        `${wallet.name} did not respond to the connection request.`,
+      );
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (attempt === CONNECT_ATTEMPTS || !TRANSIENT_CONNECT_ERROR.test(message)) break;
+      logger.warn({ attempt, message }, 'wallet connect failed, retrying');
+      await delay(attempt * 800);
+    }
+  }
+
+  const detail = lastError instanceof Error ? lastError.message : String(lastError);
+  if (TRANSIENT_CONNECT_ERROR.test(detail)) {
+    throw new Error(
+      `${wallet.name} is reporting a locked wallet. Open the extension and unlock it. ` +
+        'If it is already unlocked, close the popup, reload this page, and connect again. ' +
+        `Wallet said: ${detail}`,
+    );
+  }
+  throw lastError instanceof Error ? lastError : new Error(detail);
+}
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
