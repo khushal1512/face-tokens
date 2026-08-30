@@ -23,6 +23,8 @@ import ReadinessNotice from './components/ReadinessNotice';
 
 const NETWORK_ID = (import.meta.env.VITE_NETWORK_ID ?? 'preprod') as NetworkId;
 const DEFAULT_CONTRACT = (import.meta.env.VITE_DEFAULT_CONTRACT ?? '').trim();
+/** With a contract baked into the build, nobody needs to deploy or switch one. */
+const MANAGES_OWN_CONTRACT = DEFAULT_CONTRACT === '';
 const FACE_MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
 
 /** The circuit rejects anything below this, so the UI should too. */
@@ -224,8 +226,12 @@ export default function App() {
       return;
     }
     if (!CONTRACT_ADDRESS_RE.test(contractAddress)) {
-      setError('Join a contract or deploy a new one before minting.');
-      setShowJoinPanel(true);
+      setError(
+        MANAGES_OWN_CONTRACT
+          ? 'Join a contract or deploy a new one before minting.'
+          : 'This build has no valid contract configured. Set VITE_DEFAULT_CONTRACT and rebuild.',
+      );
+      setShowJoinPanel(MANAGES_OWN_CONTRACT);
       return;
     }
 
@@ -329,21 +335,23 @@ export default function App() {
             : 'Start the camera, hold still until your face is found, then turn left and right when prompted.'}
         </p>
 
-        <div className="contract-bar">
-          <input
-            type="text"
-            readOnly
-            value={contractAddress || 'No contract selected'}
-            onClick={() => contractAddress && copyToClipboard(contractAddress)}
-            title={contractAddress ? 'Click to copy' : undefined}
-            className={contractAddress ? 'mono' : 'mono muted'}
-          />
-          <button className="btn-small" onClick={() => setShowJoinPanel(!showJoinPanel)}>
-            {showJoinPanel ? 'Cancel' : contractAddress ? 'Switch' : 'Select'}
-          </button>
-        </div>
+        {MANAGES_OWN_CONTRACT && (
+          <div className="contract-bar">
+            <input
+              type="text"
+              readOnly
+              value={contractAddress || 'No contract selected'}
+              onClick={() => contractAddress && copyToClipboard(contractAddress)}
+              title={contractAddress ? 'Click to copy' : undefined}
+              className={contractAddress ? 'mono' : 'mono muted'}
+            />
+            <button className="btn-small" onClick={() => setShowJoinPanel(!showJoinPanel)}>
+              {showJoinPanel ? 'Cancel' : contractAddress ? 'Switch' : 'Select'}
+            </button>
+          </div>
+        )}
 
-        {showJoinPanel && (
+        {MANAGES_OWN_CONTRACT && showJoinPanel && (
           <div className="join-panel">
             <input
               className="join-input"

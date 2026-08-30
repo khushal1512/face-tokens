@@ -103,21 +103,17 @@ npm run compile
 The frontend is a static bundle. Proving happens in the wallet and reading
 happens through the public indexer, so there is no backend to host.
 
-**1. Deploy the contract once and note the address.**
+**1. A contract is already deployed and configured.**
 
-Open the app, connect the wallet, press `Select`, then `Deploy new`. Copy the
-64 character address it returns. On preview this costs nothing. Deploy against
-the same network the app is configured for.
+`ft-ui/.env` points at a live preprod contract, so visitors mint against it
+immediately. The deploy and switch controls are hidden while
+`VITE_DEFAULT_CONTRACT` is set, and reappear if you clear it.
 
-**2. Bake that address into the build** so visitors do not have to deploy their
-own instance:
+To point at a different one, replace the address and rebuild. It has to be
+deployed on the network named by `VITE_NETWORK_ID`; an address from another
+network will not resolve.
 
-```bash
-# ft-ui/.env
-VITE_DEFAULT_CONTRACT=<the 64 hex character address>
-```
-
-**3. Build and publish `ft-ui/dist`.**
+**2. Build and publish `ft-ui/dist`.**
 
 ```bash
 npm run build
@@ -141,9 +137,9 @@ The build copies `keys/` and `zkir/` into `dist/`. Those files are what
 `FetchZkConfigProvider` fetches at proving time, so the host has to serve them
 as static assets. They are a few megabytes and must not be stripped.
 
-**4. Check the deployment** by opening the URL, confirming the ledger table
-loads (that proves the indexer and the baked in contract address are correct),
-then connecting a wallet and minting.
+**3. Check the deployment** by opening the URL and confirming the ledger table
+lists the existing tokens. That alone proves the indexer and the configured
+contract address are both correct, before any wallet is involved.
 
 ### What a reviewer needs
 
