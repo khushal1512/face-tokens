@@ -120,7 +120,11 @@ export default function App() {
     if (walletState === 'connected') return;
     const detect = () => {
       const wallets = getCompatibleWallets();
-      setCompatibleWallets(wallets);
+      // Only swap the array when the set of wallets actually changes. Replacing
+      // it every tick re-renders the whole tree while the user is mid-approval.
+      setCompatibleWallets((prev) =>
+        prev.length === wallets.length && prev.every((w, i) => w.id === wallets[i].id) ? prev : wallets,
+      );
       setSelectedWalletId((current) =>
         current && wallets.some((w) => w.id === current) ? current : wallets[0]?.id ?? '',
       );

@@ -15,12 +15,14 @@ import { type NetworkId, setNetworkId } from '@midnight-ntwrk/midnight-js-networ
 import type { ProofProvider, UnboundTransaction } from '@midnight-ntwrk/midnight-js-types';
 
 const COMPATIBLE_CONNECTOR_API_VERSION = '4.x';
-const CONNECT_TIMEOUT_MS = 30_000;
-const CONNECT_ATTEMPTS = 3;
+/**
+ * Long enough for someone to unlock the extension and approve the prompt.
+ * connect() is deliberately called once: each call can raise a fresh prompt,
+ * so retrying re-asks before the user has answered the first one.
+ */
+const CONNECT_TIMEOUT_MS = 120_000;
 /** Networks where 1AM sponsors fees, so no NIGHT and no DUST are needed. */
 const SPONSORED_NETWORKS = new Set(['preview', 'mainnet']);
-/** Errors worth retrying: the extension's worker often reports a stale state. */
-const TRANSIENT_CONNECT_ERROR = /lock|not enabled|not ready|unauthori[sz]ed|no account|initiali/i;
 
 export type FaceTokenDeployment =
   | { readonly status: 'in-progress' }
@@ -142,7 +144,7 @@ const createWalletSession = async (logger: Logger, walletId?: string): Promise<W
     );
   }
 
-  const api = await connectWithRetry(wallet, requestedNetwork, logger);
+  const api = await connectWallet(wallet, requestedNetwork, logger);
 
   const [config, unshielded, shielded] = await Promise.all([
     api.getConfiguration(),
@@ -323,40 +325,28 @@ function normaliseTxId(result: unknown): TransactionId | undefined {
  * rehydrated yet. Waking it and asking again clears it, so a transient looking
  * failure is retried before it reaches the user.
  */
-async function connectWithRetry(wallet: WalletInfo, networkId: string, logger: Logger): Promise<ConnectedAPI> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= CONNECT_ATTEMPTS; attempt++) {
-    try {
-      return await withTimeout(
-        wallet.api.connect(networkId),
-        CONNECT_TIMEOUT_MS,
-        `${wallet.name} did not respond to the connection request.`,
-      );
-    } catch (error) {
-      lastError = error;
-      const message = error instanceof Error ? error.message : String(error);
-      if (attempt === CONNECT_ATTEMPTS || !TRANSIENT_CONNECT_ERROR.test(message)) break;
-      logger.warn({ attempt, message }, 'wallet connect failed, retrying');
-      await delay(attempt * 800);
-    }
-  }
+async function connectWallet(wallet: WalletInfo, networkId: string, logger: Logger): Promise<ConnectedAPI> {
+  try {
+    return await withTimeout(
+      wallet.api.connect(networkId),
+      CONNECT_TIMEOUT_MS,
+      `${wallet.name} did not respond. Check for an unanswered prompt in the extension.`,
+    );
+  } catch (error) {
+    // Keep the wallet's own wording. Guessing at a cause here produced messages
+    // that contradicted what the extension was actually reporting.
+    const detail = error instanceof Error ? error.message : String(error);
+    logger.error({ error, walletId: wallet.id, networkId }, 'wallet connect failed');
+    console.error('[facetoken] wallet connect failed', { wallet: wallet.id, networkId, error });
 
-  const detail = lastError instanceof Error ? lastError.message : String(lastError);
-  if (/network/i.test(detail)) {
     throw new Error(
-      `${wallet.name} refused a "${networkId}" connection. Set the extension to ${networkId}, ` +
-        `or change VITE_NETWORK_ID in ft-ui/.env to the network the wallet is on and restart the dev server. ` +
-        `Wallet said: ${detail}`,
+      `${wallet.name} refused the connection: ${detail}` +
+        `\n\nRequested network: ${networkId}. Check that the extension is set to the same one, ` +
+        'that it is unlocked, and that no approval prompt is still waiting in the extension popup. ' +
+        'In Chrome, confirm the extension has site access for this origin under ' +
+        'chrome://extensions, Details, Site access.',
     );
   }
-  if (TRANSIENT_CONNECT_ERROR.test(detail)) {
-    throw new Error(
-      `${wallet.name} is reporting a locked wallet. Open the extension and unlock it. ` +
-        'If it is already unlocked, close the popup, reload this page, and connect again. ' +
-        `Wallet said: ${detail}`,
-    );
-  }
-  throw lastError instanceof Error ? lastError : new Error(detail);
 }
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
