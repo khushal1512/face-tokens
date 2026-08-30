@@ -1,135 +1,254 @@
-import { FaceTokenAPI, type FaceTokenCircuitKeys, type FaceTokenProviders } from 'facetoken-api';
+import { FaceTokenAPI, facetokenPrivateStateKey, utils, type FaceTokenCircuitKeys, type FaceTokenProviders } from 'facetoken-api';
 import { type ContractAddress, fromHex, toHex } from '@midnight-ntwrk/midnight-js-protocol/compact-runtime';
-import { BehaviorSubject, catchError, concatMap, filter, firstValueFrom, interval, map, type Observable, take, throwError, timeout } from 'rxjs';
-import { pipe as fnPipe } from 'fp-ts/function';
+import { BehaviorSubject, type Observable } from 'rxjs';
 import { type Logger } from 'pino';
 import { type ConnectedAPI, type InitialAPI } from '@midnight-ntwrk/dapp-connector-api';
 import { FetchZkConfigProvider } from '@midnight-ntwrk/midnight-js-fetch-zk-config-provider';
 import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
-import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 import semver from 'semver';
-import { Binding, type FinalizedTransaction, Proof, SignatureEnabled, Transaction, type TransactionId } from '@midnight-ntwrk/midnight-js-protocol/ledger';
+import { Binding, CostModel, type FinalizedTransaction, Proof, type ProvingProvider, SignatureEnabled, Transaction, type TransactionId } from '@midnight-ntwrk/midnight-js-protocol/ledger';
 import { type FaceTokenPrivateState } from 'facetoken-contract';
 import { inMemoryPrivateStateProvider } from '../in-memory-private-state-provider.js';
+import { createPatchedPublicDataProvider } from '../patched-public-data-provider.js';
 import { type NetworkId, setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
-import type { UnboundTransaction } from '@midnight-ntwrk/midnight-js-types';
+import type { ProofProvider, UnboundTransaction } from '@midnight-ntwrk/midnight-js-types';
+
+const COMPATIBLE_CONNECTOR_API_VERSION = '4.x';
+const CONNECT_TIMEOUT_MS = 30_000;
 
 export type FaceTokenDeployment =
   | { readonly status: 'in-progress' }
   | { readonly status: 'deployed'; readonly api: FaceTokenAPI }
   | { readonly status: 'failed'; readonly error: Error };
 
+/** Everything a single wallet authorisation gives us. Built exactly once per connect. */
+export interface WalletSession {
+  readonly walletId: string;
+  readonly api: ConnectedAPI;
+  readonly networkId: NetworkId;
+  readonly unshieldedAddress: string;
+  readonly coinPublicKeyBytes: Uint8Array;
+  readonly providers: FaceTokenProviders;
+}
+
 export class BrowserFaceTokenManager {
   readonly #deploymentsSubject = new BehaviorSubject<Array<BehaviorSubject<FaceTokenDeployment>>>([]);
-  #initializedProviders: Promise<FaceTokenProviders> | undefined;
-  #providers: FaceTokenProviders | undefined;
+  #session: Promise<WalletSession> | undefined;
+  #resolved: WalletSession | undefined;
 
   constructor(private readonly logger: Logger) {}
 
   readonly deployments$: Observable<Array<Observable<FaceTokenDeployment>>> = this.#deploymentsSubject;
 
-  get providers(): FaceTokenProviders | undefined {
-    return this.#providers;
+  get session(): WalletSession | undefined {
+    return this.#resolved;
   }
 
-  resolve(contractAddress?: ContractAddress): Observable<FaceTokenDeployment> {
-    // Ensure network ID is always set before any contract/ledger operation.
-    const networkId = (import.meta.env.VITE_NETWORK_ID || 'preprod') as NetworkId;
-    setNetworkId(networkId);
+  get providers(): FaceTokenProviders | undefined {
+    return this.#resolved?.providers;
+  }
 
+  /**
+   * Authorise the wallet and build the provider set. Memoised, so every later
+   * caller reuses the same authorisation instead of triggering a second prompt.
+   */
+  connect(walletId?: string): Promise<WalletSession> {
+    if (!this.#session) {
+      this.#session = createWalletSession(this.logger, walletId)
+        .then((session) => {
+          this.#resolved = session;
+          return session;
+        })
+        .catch((error: unknown) => {
+          this.#session = undefined;
+          throw error;
+        });
+    }
+    return this.#session;
+  }
+
+  disconnect(): void {
+    this.#session = undefined;
+    this.#resolved = undefined;
+    this.#deploymentsSubject.next([]);
+  }
+
+  /** Join an already deployed contract, or deploy a fresh one when no address is given. */
+  resolve(contractAddress?: ContractAddress): Observable<FaceTokenDeployment> {
     const deployments = this.#deploymentsSubject.value;
     const existing = deployments.find(
       (d) => d.value.status === 'deployed' && d.value.api.deployedContractAddress === contractAddress,
     );
-    if (existing) return existing;
-
-    const dummyFaceHash = new Uint8Array(32);
-    const dummyScore = 0n;
+    if (contractAddress && existing) return existing;
 
     const deployment = new BehaviorSubject<FaceTokenDeployment>({ status: 'in-progress' });
-    if (contractAddress) {
-      void this.run(deployment, (providers) => FaceTokenAPI.join(providers, contractAddress, dummyFaceHash, dummyScore, this.logger));
-    } else {
-      void this.run(deployment, (providers) => FaceTokenAPI.deploy(providers, dummyFaceHash, dummyScore, this.logger));
-    }
+    void this.run(deployment, contractAddress);
     this.#deploymentsSubject.next([...deployments, deployment]);
     return deployment;
   }
 
-  getProviders(walletId?: string): Promise<FaceTokenProviders> {
-    if (!this.#initializedProviders) {
-      this.#initializedProviders = initializeProviders(this.logger, walletId).then((provs) => {
-        this.#providers = provs;
-        return provs;
-      });
-    }
-    return this.#initializedProviders;
-  }
-
-  resetProviders(): void {
-    this.#initializedProviders = undefined;
-    this.#providers = undefined;
-  }
-
   private async run(
     deployment: BehaviorSubject<FaceTokenDeployment>,
-    factory: (providers: FaceTokenProviders) => Promise<FaceTokenAPI>,
-    walletId?: string
+    contractAddress?: ContractAddress,
   ): Promise<void> {
     try {
-      const providers = await this.getProviders(walletId);
-      const api = await factory(providers);
+      const { providers } = await this.connect();
+      // The circuit reads the face hash and liveness score out of private state,
+      // which App writes before minting. Deploy and join only need a placeholder.
+      const seedHash = new Uint8Array(32);
+      const seedScore = 0n;
+      const api = contractAddress
+        ? await FaceTokenAPI.join(providers, contractAddress, seedHash, seedScore, this.logger)
+        : await FaceTokenAPI.deploy(providers, seedHash, seedScore, this.logger);
       deployment.next({ status: 'deployed', api });
     } catch (error: unknown) {
-      console.error('Contract operation failed:', error);
-      let err: Error;
-      if (error instanceof Error) {
-        err = error;
-      } else if (typeof error === 'string') {
-        err = new Error(error);
-      } else {
-        err = new Error(JSON.stringify(error) || 'Unknown error during contract operation');
-      }
-      deployment.next({ status: 'failed', error: err });
+      this.logger.error({ error }, 'contract operation failed');
+      deployment.next({ status: 'failed', error: asError(error) });
     }
   }
 }
 
-// ── Provider initialization ────────────────────────────────────────────
+function asError(error: unknown): Error {
+  if (error instanceof Error) return error;
+  if (typeof error === 'string') return new Error(error);
+  try {
+    return new Error(JSON.stringify(error));
+  } catch {
+    return new Error('Unknown error during contract operation');
+  }
+}
 
-const COMPATIBLE_CONNECTOR_API_VERSION = '4.x';
+// ── Session construction ───────────────────────────────────────────────
 
-const initializeProviders = async (logger: Logger, walletId?: string): Promise<FaceTokenProviders> => {
-  const networkId = import.meta.env.VITE_NETWORK_ID as NetworkId;
+const createWalletSession = async (logger: Logger, walletId?: string): Promise<WalletSession> => {
+  const requestedNetwork = (import.meta.env.VITE_NETWORK_ID ?? 'preprod') as NetworkId;
+  const wallet = findWallet(walletId);
+  if (!wallet) {
+    throw new Error(
+      'No compatible Midnight wallet found. Install the 1AM wallet extension, or Lace with Midnight support, then reload.',
+    );
+  }
+
+  const api = await withTimeout(
+    wallet.api.connect(requestedNetwork),
+    CONNECT_TIMEOUT_MS,
+    'The wallet did not respond to the connection request.',
+  );
+
+  const [config, unshielded, shielded] = await Promise.all([
+    api.getConfiguration(),
+    api.getUnshieldedAddress(),
+    api.getShieldedAddresses(),
+  ]);
+
+  // The wallet is the source of truth for which chain we are actually on.
+  const networkId = (config.networkId ?? requestedNetwork) as NetworkId;
+  if (networkId !== requestedNetwork) {
+    logger.warn({ requestedNetwork, networkId }, 'wallet is on a different network than configured');
+  }
   setNetworkId(networkId);
 
-  const connectedAPI = await connectToWallet(logger, networkId, walletId);
-  const config = await connectedAPI.getConfiguration();
-  const proofServerUri = config.proverServerUri!;
-  const shieldedAddresses = await connectedAPI.getShieldedAddresses();
-  const zkConfigProvider = new FetchZkConfigProvider<FaceTokenCircuitKeys>(window.location.origin, fetch.bind(window));
+  const zkConfigProvider = new FetchZkConfigProvider<FaceTokenCircuitKeys>(
+    window.location.origin,
+    fetch.bind(window),
+  );
 
-  return {
-    privateStateProvider: inMemoryPrivateStateProvider<string, FaceTokenPrivateState>(),
+  const proofProvider = await resolveProofProvider(api, zkConfigProvider, config.proverServerUri, logger);
+
+  const providers: FaceTokenProviders = {
+    privateStateProvider: inMemoryPrivateStateProvider<typeof facetokenPrivateStateKey, FaceTokenPrivateState>(),
     zkConfigProvider,
-    proofProvider: httpClientProofProvider(proofServerUri, zkConfigProvider),
-    publicDataProvider: indexerPublicDataProvider(config.indexerUri, config.indexerWsUri),
+    proofProvider,
+    publicDataProvider: createPatchedPublicDataProvider(config.indexerUri, config.indexerWsUri),
     walletProvider: {
-      getCoinPublicKey: () => shieldedAddresses.shieldedCoinPublicKey,
-      getEncryptionPublicKey: () => shieldedAddresses.shieldedEncryptionPublicKey,
+      getCoinPublicKey: () => shielded.shieldedCoinPublicKey,
+      getEncryptionPublicKey: () => shielded.shieldedEncryptionPublicKey,
       balanceTx: async (tx: UnboundTransaction): Promise<FinalizedTransaction> => {
-        const received = await connectedAPI.balanceUnsealedTransaction(toHex(tx.serialize()));
-        return Transaction.deserialize<SignatureEnabled, Proof, Binding>('signature', 'proof', 'binding', fromHex(received.tx));
+        const balanced = await api.balanceUnsealedTransaction(toHex(tx.serialize()));
+        if (!balanced?.tx) {
+          throw new Error('The wallet could not fund this transaction. Check your DUST balance.');
+        }
+        return Transaction.deserialize<SignatureEnabled, Proof, Binding>(
+          'signature',
+          'proof',
+          'binding',
+          fromHex(balanced.tx),
+        );
       },
     },
     midnightProvider: {
       submitTx: async (tx: FinalizedTransaction): Promise<TransactionId> => {
-        await connectedAPI.submitTransaction(toHex(tx.serialize()));
-        return tx.identifiers()[0];
+        const result = await api.submitTransaction(toHex(tx.serialize()));
+        return normaliseTxId(result) ?? tx.identifiers()[0];
       },
     },
   };
+
+  return {
+    walletId: wallet.id,
+    api,
+    networkId,
+    unshieldedAddress: unshielded.unshieldedAddress,
+    coinPublicKeyBytes: utils.coinPublicKeyToBytes(shielded.shieldedCoinPublicKey),
+    providers,
+  };
 };
+
+/**
+ * Prefer proving inside the wallet. 1AM exposes `getProvingProvider`, which
+ * routes to its ProofStation, so nobody has to run a proof server in Docker.
+ * Wallets without it fall back to whatever proof server their config names.
+ */
+async function resolveProofProvider(
+  api: ConnectedAPI,
+  zkConfigProvider: FetchZkConfigProvider<FaceTokenCircuitKeys>,
+  proverServerUri: string | undefined,
+  logger: Logger,
+): Promise<ProofProvider> {
+  type WalletWithProving = ConnectedAPI & {
+    getProvingProvider?: (zk: unknown) => Promise<ProvingProvider>;
+  };
+  const getProvingProvider = (api as WalletWithProving).getProvingProvider;
+
+  if (typeof getProvingProvider === 'function') {
+    try {
+      const provingProvider = await getProvingProvider.call(api, zkConfigProvider);
+      logger.info('proving through the wallet, no local proof server needed');
+      // Calling prove() directly is the only path that hands the wallet's
+      // proving provider a cost model it accepts.
+      return {
+        proveTx: (unprovenTx) => unprovenTx.prove(provingProvider, CostModel.initialCostModel()),
+      };
+    } catch (error) {
+      logger.warn({ error }, 'wallet proving unavailable, falling back to a proof server');
+    }
+  }
+
+  if (!proverServerUri) {
+    throw new Error(
+      'This wallet cannot generate proofs on its own and reported no proof server. ' +
+        'Run one with "npm run proof-server", then reconnect.',
+    );
+  }
+  return httpClientProofProvider(proverServerUri, zkConfigProvider);
+}
+
+/** `submitTransaction` returns a bare id on some wallets and an object on others. */
+function normaliseTxId(result: unknown): TransactionId | undefined {
+  if (typeof result === 'string' && result.length > 0) return result as TransactionId;
+  if (result && typeof result === 'object') {
+    const candidate = (result as any).transactionId ?? (result as any).id;
+    if (typeof candidate === 'string' && candidate.length > 0) return candidate as TransactionId;
+  }
+  return undefined;
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(resolve, reject).finally(() => clearTimeout(timer));
+  });
+}
 
 // ── Wallet detection ───────────────────────────────────────────────────
 
@@ -140,40 +259,28 @@ export interface WalletInfo {
   api: InitialAPI;
 }
 
+const WALLET_LABELS: Record<string, string> = { '1am': '1AM Wallet', mnLace: 'Lace Wallet', lace: 'Lace Wallet' };
+
 export function getCompatibleWallets(): WalletInfo[] {
   if (!window.midnight) return [];
   return Object.entries(window.midnight)
-    .filter(([_, wallet]) => !!wallet && typeof wallet === 'object' && 'apiVersion' in wallet)
+    .filter(([, wallet]) => isConnectorApi(wallet))
     .map(([id, wallet]) => ({
       id,
-      name: id === '1am' ? '1AM Wallet' : id === 'lace' ? 'Lace Wallet' : id.charAt(0).toUpperCase() + id.slice(1) + ' Wallet',
-      apiVersion: (wallet as any).apiVersion,
-      api: wallet as InitialAPI
-    }));
+      name: WALLET_LABELS[id] ?? `${id.charAt(0).toUpperCase()}${id.slice(1)} Wallet`,
+      apiVersion: (wallet as InitialAPI).apiVersion,
+      api: wallet as InitialAPI,
+    }))
+    .filter((w) => semver.validRange(COMPATIBLE_CONNECTOR_API_VERSION) !== null
+      && semver.valid(semver.coerce(w.apiVersion)) !== null
+      && semver.satisfies(semver.coerce(w.apiVersion)!, COMPATIBLE_CONNECTOR_API_VERSION));
 }
 
-const getWalletById = (walletId?: string): InitialAPI | undefined => {
-  if (!window.midnight) return undefined;
-  if (walletId && window.midnight[walletId]) {
-    return window.midnight[walletId] as InitialAPI;
-  }
-  return Object.values(window.midnight).find(
-    (wallet): wallet is InitialAPI =>
-      !!wallet && typeof wallet === 'object' && 'apiVersion' in wallet &&
-      semver.satisfies(wallet.apiVersion, COMPATIBLE_CONNECTOR_API_VERSION),
-  );
-};
+function isConnectorApi(wallet: unknown): wallet is InitialAPI {
+  return !!wallet && typeof wallet === 'object' && 'apiVersion' in wallet && 'connect' in wallet;
+}
 
-const connectToWallet = (logger: Logger, networkId: string, walletId?: string): Promise<ConnectedAPI> =>
-  firstValueFrom(
-    fnPipe(
-      interval(100),
-      map(() => getWalletById(walletId)),
-      filter((api): api is InitialAPI => !!api),
-      take(1),
-      timeout({ first: 5_000, with: () => throwError(() => new Error('Could not find compatible wallet.')) }),
-      concatMap(async (initialAPI) => initialAPI.connect(networkId)),
-      timeout({ first: 5_000, with: () => throwError(() => new Error('Wallet failed to respond.')) }),
-      catchError((error) => throwError(() => error instanceof Error ? error : new Error('Wallet not authorized'))),
-    ),
-  );
+function findWallet(walletId?: string): WalletInfo | undefined {
+  const wallets = getCompatibleWallets();
+  return wallets.find((w) => w.id === walletId) ?? wallets[0];
+}
