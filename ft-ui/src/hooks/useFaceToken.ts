@@ -1,92 +1,75 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { ContractState } from '@midnight-ntwrk/midnight-js-protocol/compact-runtime';
 import { FaceToken } from 'facetoken-contract';
-import { utils } from 'facetoken-api';
+import { utils, type FaceTokenEntry } from 'facetoken-api';
+import { gqlQuery } from '../patched-public-data-provider';
 
-const INDEXER_URL = import.meta.env.VITE_INDEXER_URL ?? 'https://indexer.preprod.midnight.network/api/v4/graphql';
+const INDEXER_URL =
+  import.meta.env.VITE_INDEXER_URL ?? 'https://indexer.preprod.midnight.network/api/v4/graphql';
 
 const CONTRACT_STATE_QUERY = `
   query ContractState($address: HexEncoded!) {
-    contractAction(address: $address) {
-      state
-    }
+    contractAction(address: $address) { state }
   }
 `;
 
-export interface FaceTokenEntry {
-  tokenId: number;
-  owner: string;
-  faceHash: string;
-  livenessScore: number;
-}
+const CONTRACT_ADDRESS_RE = /^[0-9a-fA-F]{64}$/;
 
-function hexToBytes(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
-  }
-  return bytes;
-}
-
+/**
+ * Read-only view of the token ledger. Deliberately independent of the wallet
+ * session so the list renders before anyone connects.
+ */
 export function useFaceToken(contractAddress: string | null, refreshInterval = 10_000) {
   const [tokens, setTokens] = useState<FaceTokenEntry[]>([]);
   const [tokenCount, setTokenCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const inFlight = useRef(false);
 
-  const fetchFaceTokens = useCallback(async () => {
-    if (!contractAddress || !/^[0-9a-fA-F]{64}$/.test(contractAddress)) return;
-
+  const refresh = useCallback(async () => {
+    if (!contractAddress || !CONTRACT_ADDRESS_RE.test(contractAddress)) {
+      setTokens([]);
+      setTokenCount(0);
+      setError(null);
+      return;
+    }
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setLoading(true);
     try {
-      setLoading(true);
-      const res = await fetch(INDEXER_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: CONTRACT_STATE_QUERY, variables: { address: contractAddress } }),
-      });
+      const data = await gqlQuery(INDEXER_URL, CONTRACT_STATE_QUERY, { address: contractAddress });
+      const stateHex = data?.contractAction?.state;
+      if (!stateHex) throw new Error('This contract has not been indexed yet.');
 
-      const gql = await res.json();
-      if (gql.errors) {
-        throw new Error(gql.errors[0]?.message ?? 'Indexer query failed');
-      }
-
-      const stateHex = gql.data?.contractAction?.state;
-      if (!stateHex) {
-        throw new Error('Contract not found');
-      }
-
-      const contractState = ContractState.deserialize(hexToBytes(stateHex));
-      const ledgerState = FaceToken.ledger(contractState.data);
-
+      const ledger = FaceToken.ledger(ContractState.deserialize(utils.fromHex(stateHex)).data);
       const parsed: FaceTokenEntry[] = [];
-      for (const [key, entry] of ledgerState.tokens) {
+      for (const [tokenId, entry] of ledger.tokens) {
         parsed.push({
-          tokenId: Number(key),
+          tokenId: Number(tokenId),
           owner: utils.formatAddress(entry.owner),
           faceHash: utils.toHex(entry.faceHash),
           livenessScore: Number(entry.livenessScore),
         });
       }
+      parsed.sort((a, b) => b.tokenId - a.tokenId);
 
       setTokens(parsed);
-      setTokenCount(Number(ledgerState.nextTokenId));
+      setTokenCount(Number(ledger.nextTokenId));
       setError(null);
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not read the contract ledger.');
     } finally {
+      inFlight.current = false;
       setLoading(false);
     }
   }, [contractAddress]);
 
   useEffect(() => {
-    fetchFaceTokens();
-  }, [fetchFaceTokens]);
-
-  useEffect(() => {
+    void refresh();
     if (!contractAddress) return;
-    const interval = setInterval(fetchFaceTokens, refreshInterval);
-    return () => clearInterval(interval);
-  }, [contractAddress, refreshInterval, fetchFaceTokens]);
+    const id = setInterval(() => void refresh(), refreshInterval);
+    return () => clearInterval(id);
+  }, [contractAddress, refreshInterval, refresh]);
 
-  return { tokens, tokenCount, loading, error, refresh: fetchFaceTokens };
+  return { tokens, tokenCount, loading, error, refresh };
 }
