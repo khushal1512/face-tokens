@@ -1,4 +1,5 @@
 import { type WalletInfo } from '../contexts/BrowserFaceTokenManager';
+import type { WalletState } from '../App';
 
 interface HeaderProps {
   isConnected: boolean;
@@ -7,7 +8,8 @@ interface HeaderProps {
   selectedWalletId: string;
   setSelectedWalletId: (id: string) => void;
   connectWallet: () => Promise<void>;
-  walletState: 'detecting' | 'ready' | 'connecting' | 'connected';
+  disconnectWallet: () => void;
+  walletState: WalletState;
   truncAddr: (addr: string) => string;
 }
 
@@ -18,37 +20,39 @@ export default function Header({
   selectedWalletId,
   setSelectedWalletId,
   connectWallet,
+  disconnectWallet,
   walletState,
   truncAddr,
 }: HeaderProps) {
   return (
     <header className="app-header">
-      <div>
-        <span className="logo" onClick={() => window.location.reload()}>ft.</span>
-        <div className="title-desc">In-browser face attestation on Midnight</div>
+      <div className="app-header-brand">
+        <span className="wordmark small">Face<span className="wordmark-dim">Token</span></span>
+        <span className="title-desc">In browser face attestation on Midnight</span>
       </div>
+
       <div className="wallet-section">
         {isConnected && address ? (
-          <div className="wallet-chip">{truncAddr(address)}</div>
+          <>
+            <span className="wallet-chip" title={address}>{truncAddr(address)}</span>
+            <button className="btn-quiet" onClick={disconnectWallet}>Disconnect</button>
+          </>
         ) : (
           <>
-            {compatibleWallets.length > 0 && (
+            {compatibleWallets.length > 1 && (
               <select
                 className="wallet-dropdown"
                 value={selectedWalletId}
                 onChange={(e) => setSelectedWalletId(e.target.value)}
+                aria-label="Wallet"
               >
                 {compatibleWallets.map((w) => (
                   <option key={w.id} value={w.id}>{w.name}</option>
                 ))}
               </select>
             )}
-            <button
-              className="btn-wallet-connect"
-              onClick={connectWallet}
-              disabled={walletState === 'connecting'}
-            >
-              {walletState === 'connecting' ? 'Connecting...' : 'Connect Wallet'}
+            <button className="btn-ghost" onClick={connectWallet} disabled={walletState === 'connecting'}>
+              {walletState === 'connecting' ? 'Connecting' : 'Connect wallet'}
             </button>
           </>
         )}
